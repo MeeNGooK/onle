@@ -14,40 +14,45 @@ const todayISO = (date = new Date()) => {
 const uid = () =>
   crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
 
+const sampleProjects = () => [
+  { id: "p-onle", name: "ONLE 만들기", parentId: "", createdAt: todayISO() },
+  { id: "p-health", name: "생활 루틴", parentId: "", createdAt: todayISO() },
+];
+
+const sampleTasks = () => [
+  {
+    id: "t-1",
+    title: "오늘의 첫 화면 설계하기",
+    detail: "로그인 위젯과 기본 내비게이션 방향 잡기",
+    projectId: "p-onle",
+    date: todayISO(),
+    done: true,
+    createdAt: todayISO(),
+  },
+  {
+    id: "t-2",
+    title: "샐러드 해먹기",
+    detail: "",
+    projectId: "",
+    date: todayISO(),
+    done: false,
+    createdAt: todayISO(),
+  },
+];
+
 const makeInitialState = (nickname = "") => ({
   user: nickname ? { name: nickname } : null,
   view: "daily",
   calendarMode: "rate",
   selectedDate: todayISO(),
+  activeProjectId: "",
   settings: {
     lowColor: "#ffffff",
     midColor: "#a7e46f",
     highColor: "#14883e",
   },
-  projects: [
-    { id: "p-onle", name: "ONLE 만들기", parentId: "", createdAt: todayISO() },
-    { id: "p-health", name: "생활 루틴", parentId: "", createdAt: todayISO() },
-  ],
-  tasks: [
-    {
-      id: "t-1",
-      title: "오늘의 첫 화면 설계하기",
-      detail: "로그인 위젯과 기본 내비게이션 방향 잡기",
-      projectId: "p-onle",
-      date: todayISO(),
-      done: true,
-      createdAt: todayISO(),
-    },
-    {
-      id: "t-2",
-      title: "샐러드 해먹기",
-      detail: "",
-      projectId: "",
-      date: todayISO(),
-      done: false,
-      createdAt: todayISO(),
-    },
-  ],
+  projects: sampleProjects(),
+  tasks: sampleTasks(),
 });
 
 const defaultState = makeInitialState();
@@ -59,6 +64,9 @@ let unsubscribeRemote = null;
 let saveTimer = null;
 let applyingRemoteState = false;
 let syncStatus = firebaseEnabled ? "Firebase 준비 중" : "로컬 모드";
+let browserHistoryDepth = 0;
+let modalHistoryOpen = false;
+let ignoreNextPopstate = false;
 
 class LocalUserStorage {
   constructor(nickname) {
@@ -69,8 +77,7 @@ class LocalUserStorage {
   async load() {
     const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
     const stored = localStorage.getItem(this.key) || legacy;
-    if (!stored) return null;
-    return JSON.parse(stored);
+    return stored ? JSON.parse(stored) : null;
   }
 
   async save(nextState) {
@@ -104,8 +111,7 @@ class FirebaseUserStorage {
       return localState;
     }
 
-    const data = snapshot.data();
-    const remoteState = data.state || null;
+    const remoteState = snapshot.data().state || null;
     if (remoteState) await this.local.save(remoteState);
     return remoteState || localState;
   }
@@ -126,8 +132,8 @@ class FirebaseUserStorage {
   subscribe(callback) {
     return this.firebase.onSnapshot(this.docRef, (snapshot) => {
       if (!snapshot.exists()) return;
-      const data = snapshot.data();
-      if (data.state) callback(data.state);
+      const remoteState = snapshot.data().state;
+      if (remoteState) callback(remoteState);
     });
   }
 }
@@ -139,7 +145,6 @@ async function createFirebaseStorage(nickname) {
   const firestoreModule = await import(
     `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-firestore.js`
   );
-
   const app = appModule.getApps().length
     ? appModule.getApp()
     : appModule.initializeApp(firebaseConfig);
@@ -160,11 +165,12 @@ function mergeState(loadedState, nickname) {
     ...structuredClone(defaultState),
     ...loadedState,
     user: { name: nickname },
-    tasks: Array.isArray(loadedState?.tasks) ? loadedState.tasks : defaultState.tasks,
+    tasks: Array.isArray(loadedState?.tasks) ? loadedState.tasks : sampleTasks(),
     projects: Array.isArray(loadedState?.projects)
       ? loadedState.projects
-      : defaultState.projects,
+      : sampleProjects(),
     settings: { ...defaultState.settings, ...(loadedState?.settings || {}) },
+    activeProjectId: loadedState?.activeProjectId || "",
   };
 }
 
@@ -187,17 +193,24 @@ async function openUser(nickname) {
     const loaded = await storage.load();
     state = mergeState(loaded || makeInitialState(activeNickname), activeNickname);
     localStorage.setItem(LAST_NICKNAME_KEY, activeNickname);
-    syncStatus = firebaseEnabled ? "Firebase 동기화됨" : "로컬 저장됨";
+    syncStatus =
+      firebaseEnabled && storage instanceof FirebaseUserStorage
+        ? "Firebase 동기화됨"
+        : "로컬 저장됨";
 
     unsubscribeRemote = storage.subscribe((remoteState) => {
       if (!remoteState || applyingRemoteState) return;
       applyingRemoteState = true;
       state = mergeState(remoteState, activeNickname);
-      syncStatus = firebaseEnabled ? "Firebase에서 업데이트됨" : "로컬 업데이트됨";
+      syncStatus =
+        firebaseEnabled && storage instanceof FirebaseUserStorage
+          ? "Firebase에서 업데이트됨"
+          : "로컬 업데이트됨";
       render();
       applyingRemoteState = false;
     });
 
+    replaceBrowserRoute();
     await saveStateNow();
   } catch (error) {
     console.error(error);
@@ -219,20 +232,88 @@ function scheduleSave() {
 async function saveStateNow() {
   if (!state.user || !storage) return;
   try {
-    syncStatus = firebaseEnabled && storage instanceof FirebaseUserStorage ? "저장 중" : "로컬 저장 중";
+    syncStatus =
+      firebaseEnabled && storage instanceof FirebaseUserStorage
+        ? "저장 중"
+        : "로컬 저장 중";
     await storage.save(state);
-    syncStatus = firebaseEnabled && storage instanceof FirebaseUserStorage ? "Firebase 동기화됨" : "로컬 저장됨";
+    syncStatus =
+      firebaseEnabled && storage instanceof FirebaseUserStorage
+        ? "Firebase 동기화됨"
+        : "로컬 저장됨";
   } catch (error) {
     console.error(error);
     syncStatus = "저장 실패";
   }
 }
 
+function currentRoute() {
+  return {
+    view: state.view,
+    selectedDate: state.selectedDate,
+    activeProjectId: state.activeProjectId || "",
+  };
+}
+
+function applyRoute(route) {
+  state.view = route?.view || "daily";
+  state.selectedDate = route?.selectedDate || todayISO();
+  state.activeProjectId = route?.activeProjectId || "";
+}
+
+function replaceBrowserRoute() {
+  window.history.replaceState(currentRoute(), "", window.location.href);
+}
+
+function navigateTo(route) {
+  applyRoute({ ...currentRoute(), ...route });
+  browserHistoryDepth += 1;
+  window.history.pushState(currentRoute(), "", window.location.href);
+  scheduleSave();
+  render();
+}
+
+function goBack() {
+  if (document.querySelector(".modal")) {
+    closeModal();
+    return;
+  }
+  if (browserHistoryDepth > 0) {
+    window.history.back();
+    return;
+  }
+  if (state.view === "projects" && state.activeProjectId) {
+    const project = getProject(state.activeProjectId);
+    navigateTo({ view: "projects", activeProjectId: project?.parentId || "" });
+    return;
+  }
+  if (state.view !== "daily") navigateTo({ view: "daily", activeProjectId: "" });
+}
+
+window.addEventListener("popstate", (event) => {
+  if (ignoreNextPopstate) {
+    ignoreNextPopstate = false;
+    return;
+  }
+  browserHistoryDepth = Math.max(0, browserHistoryDepth - 1);
+  if (modalHistoryOpen) closeModal({ fromPopstate: true });
+  if (event.state) applyRoute(event.state);
+  render();
+});
+
 function percent(done, total) {
   return total ? Math.round((done / total) * 100) : 0;
 }
 
-function projectTaskIds(projectId) {
+function getProject(projectId) {
+  return state.projects.find((project) => project.id === projectId);
+}
+
+function childProjects(parentId) {
+  return state.projects.filter((project) => (project.parentId || "") === parentId);
+}
+
+function projectDescendantIds(projectId) {
   const descendants = new Set([projectId]);
   let changed = true;
   while (changed) {
@@ -248,11 +329,16 @@ function projectTaskIds(projectId) {
       }
     });
   }
-  return state.tasks.filter((task) => descendants.has(task.projectId));
+  return descendants;
+}
+
+function projectTasks(projectId) {
+  const ids = projectDescendantIds(projectId);
+  return state.tasks.filter((task) => ids.has(task.projectId));
 }
 
 function projectRate(projectId) {
-  const tasks = projectTaskIds(projectId);
+  const tasks = projectTasks(projectId);
   return percent(tasks.filter((task) => task.done).length, tasks.length);
 }
 
@@ -263,6 +349,10 @@ function dayTasks(date) {
 function dayRate(date) {
   const tasks = dayTasks(date);
   return percent(tasks.filter((task) => task.done).length, tasks.length);
+}
+
+function dayDoneCount(date) {
+  return dayTasks(date).filter((task) => task.done).length;
 }
 
 function render() {
@@ -324,7 +414,7 @@ function renderSidebar() {
       </nav>
       <div class="sidebar-spacer"></div>
       <button class="settings-button ${state.view === "settings" ? "active" : ""}" data-view="settings">
-        <span class="nav-icon">⚙</span><span>설정</span><span class="badge">색상</span>
+        <span class="nav-icon">S</span><span>설정</span><span class="badge">색상</span>
       </button>
     </aside>
   `;
@@ -336,7 +426,7 @@ function renderBottomNav() {
       ${bottomButton("daily", "1", "오늘")}
       ${bottomButton("projects", "2", "프로젝트")}
       ${bottomButton("calendar", "3", "달력")}
-      ${bottomButton("settings", "⚙", "설정")}
+      ${bottomButton("settings", "S", "설정")}
     </nav>
   `;
 }
@@ -356,8 +446,8 @@ function bottomButton(view, icon, label) {
 function renderTopbar() {
   const todayTasks = dayTasks(todayISO());
   const doneToday = todayTasks.filter((task) => task.done).length;
-  const projectTasks = state.tasks.filter((task) => task.projectId);
-  const projectDone = projectTasks.filter((task) => task.done).length;
+  const projectLinkedTasks = state.tasks.filter((task) => task.projectId);
+  const projectDone = projectLinkedTasks.filter((task) => task.done).length;
   const titles = {
     daily: "일일 플래너",
     projects: "프로젝트",
@@ -366,13 +456,16 @@ function renderTopbar() {
   };
   return `
     <header class="topbar">
-      <div>
-        <h2>${titles[state.view]}</h2>
-        <p>${new Date().toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "long" })}</p>
+      <div class="title-row">
+        <button class="back-button" type="button" data-action="go-back" title="뒤로가기">‹</button>
+        <div>
+          <h2>${titles[state.view]}</h2>
+          <p>${new Date().toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "long" })}</p>
+        </div>
       </div>
       <div class="stat-row">
         <div class="stat"><strong>${percent(doneToday, todayTasks.length)}%</strong><span>하루 달성률</span></div>
-        <div class="stat"><strong>${percent(projectDone, projectTasks.length)}%</strong><span>프로젝트 달성률</span></div>
+        <div class="stat"><strong>${percent(projectDone, projectLinkedTasks.length)}%</strong><span>프로젝트 달성률</span></div>
       </div>
     </header>
   `;
@@ -396,7 +489,7 @@ function renderDaily() {
 }
 
 function renderTask(task) {
-  const project = state.projects.find((item) => item.id === task.projectId);
+  const project = getProject(task.projectId);
   return `
     <article class="task-item">
       <button class="check ${task.done ? "done" : ""}" title="완료" data-action="toggle-task" data-id="${task.id}">✓</button>
@@ -407,41 +500,90 @@ function renderTask(task) {
           ${project ? `<span class="chip">${escapeHtml(project.name)}</span>` : `<span class="chip">개인</span>`}
         </div>
       </div>
-      <button class="text-button danger-button" data-action="delete-task" data-id="${task.id}">삭제</button>
+      <div class="item-actions">
+        <button class="text-button" data-action="edit-task" data-id="${task.id}">수정</button>
+        <button class="text-button danger-button" data-action="delete-task" data-id="${task.id}">삭제</button>
+      </div>
     </article>
   `;
 }
 
 function renderProjects() {
-  const roots = state.projects.filter((project) => !project.parentId);
+  const activeProject = state.activeProjectId ? getProject(state.activeProjectId) : null;
+  const visibleProjects = childProjects(state.activeProjectId || "");
+  const activeTasks = activeProject ? projectTasks(activeProject.id) : [];
   return `
     <section class="panel">
       <div class="panel-header">
-        <h3>프로젝트 진행률</h3>
-        <button class="ghost-button" data-action="open-project-modal">프로젝트 추가</button>
+        <div>
+          <h3>${activeProject ? escapeHtml(activeProject.name) : "프로젝트 진행률"}</h3>
+          <p class="panel-subtitle">${renderProjectBreadcrumb(activeProject)}</p>
+        </div>
+        <div class="panel-actions">
+          ${activeProject ? `<button class="ghost-button" data-action="project-up">상위</button>` : ""}
+          <button class="ghost-button" data-action="open-project-modal" data-id="${state.activeProjectId || ""}">${activeProject ? "소프로젝트 추가" : "프로젝트 추가"}</button>
+        </div>
       </div>
+      ${activeProject ? renderActiveProjectSummary(activeProject, activeTasks) : ""}
       <div class="project-grid">
-        ${roots.length ? roots.map(renderProjectCard).join("") : `<div class="empty">프로젝트를 추가해보세요.</div>`}
+        ${visibleProjects.length ? visibleProjects.map(renderProjectCard).join("") : `<div class="empty">하위 프로젝트가 없습니다.</div>`}
       </div>
     </section>
   `;
 }
 
+function renderProjectBreadcrumb(activeProject) {
+  if (!activeProject) return "최상위 프로젝트";
+  return projectPath(activeProject.id).map((project) => escapeHtml(project.name)).join(" / ");
+}
+
+function projectPath(projectId) {
+  const path = [];
+  let cursor = getProject(projectId);
+  while (cursor) {
+    path.unshift(cursor);
+    cursor = cursor.parentId ? getProject(cursor.parentId) : null;
+  }
+  return path;
+}
+
+function renderActiveProjectSummary(project, tasks) {
+  const done = tasks.filter((task) => task.done).length;
+  return `
+    <div class="project-detail">
+      <div>
+        <strong>${projectRate(project.id)}%</strong>
+        <span>${done}/${tasks.length} tasks 완료</span>
+      </div>
+      <div class="panel-actions">
+        <button class="text-button" data-action="edit-project" data-id="${project.id}">이름 수정</button>
+        <button class="text-button danger-button" data-action="delete-project" data-id="${project.id}">삭제</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderProjectCard(project) {
-  const children = state.projects.filter((item) => item.parentId === project.id);
-  const tasks = projectTaskIds(project.id);
+  const children = childProjects(project.id);
+  const tasks = projectTasks(project.id);
   const rate = projectRate(project.id);
+  const done = tasks.filter((task) => task.done).length;
   return `
     <article class="project-card">
+      <button class="project-open" data-action="open-project" data-id="${project.id}" title="프로젝트 열기"></button>
       <div class="project-fill" style="height:${rate}%"></div>
       <div class="project-content">
         <div>
           <h4>${escapeHtml(project.name)}</h4>
-          <p class="project-small">${tasks.filter((task) => task.done).length}/${tasks.length} tasks · ${children.length} sub</p>
+          <p class="project-small">${done}/${tasks.length} tasks · ${children.length} sub</p>
         </div>
         <div>
           <div class="project-percent">${rate}%</div>
-          <button class="ghost-button" data-action="open-subproject-modal" data-id="${project.id}">소프로젝트 추가</button>
+          <div class="project-actions">
+            <button class="ghost-button" data-action="open-project" data-id="${project.id}">열기</button>
+            <button class="ghost-button" data-action="edit-project" data-id="${project.id}">수정</button>
+            <button class="ghost-button" data-action="open-subproject-modal" data-id="${project.id}">하위 추가</button>
+          </div>
         </div>
       </div>
     </article>
@@ -456,7 +598,7 @@ function renderCalendar() {
         <div class="calendar-tools">
           <div class="segmented">
             <button class="${state.calendarMode === "rate" ? "active" : ""}" data-calendar-mode="rate">달성률</button>
-            <button class="${state.calendarMode === "count" ? "active" : ""}" data-calendar-mode="count">개수</button>
+            <button class="${state.calendarMode === "count" ? "active" : ""}" data-calendar-mode="count">완료 개수</button>
           </div>
         </div>
       </div>
@@ -483,7 +625,8 @@ function calendarCells() {
 function renderDay(date) {
   const iso = todayISO(date);
   const tasks = dayTasks(iso);
-  const value = state.calendarMode === "rate" ? dayRate(iso) : Math.min(tasks.length * 20, 100);
+  const completed = tasks.filter((task) => task.done).length;
+  const value = state.calendarMode === "rate" ? dayRate(iso) : Math.min(completed * 20, 100);
   const base = new Date(state.selectedDate);
   const outside = date.getMonth() !== base.getMonth();
   return `
@@ -492,7 +635,7 @@ function renderDay(date) {
       data-action="select-day"
       data-date="${iso}">
       <span>${date.getDate()}</span>
-      <small>${state.calendarMode === "rate" ? `${dayRate(iso)}%` : `${tasks.length}개`}</small>
+      <small>${state.calendarMode === "rate" ? `${dayRate(iso)}%` : `${completed}개`}</small>
     </button>
   `;
 }
@@ -516,32 +659,37 @@ function renderSettings() {
   `;
 }
 
-function openTaskModal() {
+function openTaskModal(taskId = "") {
+  const task = taskId ? state.tasks.find((item) => item.id === taskId) : null;
   const projectOptions = state.projects
-    .map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`)
+    .map(
+      (project) =>
+        `<option value="${project.id}" ${task?.projectId === project.id ? "selected" : ""}>${escapeHtml(project.name)}</option>`,
+    )
     .join("");
   showModal(`
-    <form id="task-form">
-      <div class="modal-header"><strong>할 일 추가</strong><button class="text-button" type="button" data-action="close-modal">닫기</button></div>
+    <form id="task-form" data-task-id="${task?.id || ""}">
+      <div class="modal-header"><strong>${task ? "할 일 수정" : "할 일 추가"}</strong><button class="text-button" type="button" data-action="close-modal">닫기</button></div>
       <div class="modal-body form">
-        <div class="field"><label>제목</label><input name="title" placeholder="예: 샐러드 해먹기" required /></div>
-        <label class="toggle-row"><input type="checkbox" name="useDetail" /> 세부 내용 사용</label>
-        <div class="field hidden" data-field="detail"><label>세부 내용</label><textarea name="detail"></textarea></div>
-        <label class="toggle-row"><input type="checkbox" name="useProject" /> 프로젝트에 연결</label>
-        <div class="field hidden" data-field="project"><label>프로젝트</label><select name="projectId"><option value="">개인</option>${projectOptions}</select></div>
-        <div class="field"><label>날짜</label><input name="date" type="date" value="${state.selectedDate}" /></div>
+        <div class="field"><label>제목</label><input name="title" value="${escapeHtml(task?.title || "")}" placeholder="예: 샐러드 해먹기" required /></div>
+        <label class="toggle-row"><input type="checkbox" name="useDetail" ${task?.detail ? "checked" : ""} /> 세부 내용 사용</label>
+        <div class="field ${task?.detail ? "" : "hidden"}" data-field="detail"><label>세부 내용</label><textarea name="detail">${escapeHtml(task?.detail || "")}</textarea></div>
+        <label class="toggle-row"><input type="checkbox" name="useProject" ${task?.projectId ? "checked" : ""} /> 프로젝트에 연결</label>
+        <div class="field ${task?.projectId ? "" : "hidden"}" data-field="project"><label>프로젝트</label><select name="projectId"><option value="">개인</option>${projectOptions}</select></div>
+        <div class="field"><label>날짜</label><input name="date" type="date" value="${task?.date || state.selectedDate}" /></div>
       </div>
       <div class="modal-actions"><button class="text-button" type="button" data-action="close-modal">Cancel</button><button class="primary-button" type="submit">OK</button></div>
     </form>
   `);
 }
 
-function openProjectModal(parentId = "") {
+function openProjectModal(parentId = "", projectId = "") {
+  const project = projectId ? getProject(projectId) : null;
   showModal(`
-    <form id="project-form" data-parent-id="${parentId}">
-      <div class="modal-header"><strong>${parentId ? "소프로젝트 추가" : "프로젝트 추가"}</strong><button class="text-button" type="button" data-action="close-modal">닫기</button></div>
+    <form id="project-form" data-parent-id="${parentId}" data-project-id="${project?.id || ""}">
+      <div class="modal-header"><strong>${project ? "프로젝트 수정" : parentId ? "소프로젝트 추가" : "프로젝트 추가"}</strong><button class="text-button" type="button" data-action="close-modal">닫기</button></div>
       <div class="modal-body form">
-        <div class="field"><label>프로젝트명</label><input name="name" placeholder="예: 시험 준비" required /></div>
+        <div class="field"><label>프로젝트명</label><input name="name" value="${escapeHtml(project?.name || "")}" placeholder="예: 시험 준비" required /></div>
       </div>
       <div class="modal-actions"><button class="text-button" type="button" data-action="close-modal">Cancel</button><button class="primary-button" type="submit">OK</button></div>
     </form>
@@ -549,12 +697,32 @@ function openProjectModal(parentId = "") {
 }
 
 function showModal(content) {
-  document.body.insertAdjacentHTML("beforeend", `<div class="modal"><section class="modal-card">${content}</section></div>`);
+  document.activeElement?.blur();
+  if (!modalHistoryOpen) {
+    modalHistoryOpen = true;
+    browserHistoryDepth += 1;
+    window.history.pushState({ ...currentRoute(), modal: true }, "", window.location.href);
+  }
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `<div class="modal"><section class="modal-card">${content}</section></div>`,
+  );
   bindModal();
+  document.querySelector(".modal input, .modal textarea, .modal select")?.focus();
 }
 
-function closeModal() {
+function closeModal({ fromPopstate = false } = {}) {
+  document.activeElement?.blur();
   document.querySelector(".modal")?.remove();
+  if (modalHistoryOpen) {
+    modalHistoryOpen = false;
+    if (!fromPopstate) {
+      ignoreNextPopstate = true;
+      browserHistoryDepth = Math.max(0, browserHistoryDepth - 1);
+      window.history.back();
+    }
+  }
+  requestAnimationFrame(() => document.body.focus());
 }
 
 function bindWelcome() {
@@ -571,9 +739,10 @@ function bindWelcome() {
 function bindApp() {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.view = button.dataset.view;
-      scheduleSave();
-      render();
+      navigateTo({
+        view: button.dataset.view,
+        activeProjectId: button.dataset.view === "projects" ? state.activeProjectId : "",
+      });
     });
   });
 
@@ -618,15 +787,22 @@ function bindModal() {
   document.querySelector("#task-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    state.tasks.push({
-      id: uid(),
+    const taskId = event.currentTarget.dataset.taskId;
+    const nextTask = {
+      id: taskId || uid(),
       title: String(form.get("title")).trim(),
       detail: form.get("useDetail") ? String(form.get("detail")).trim() : "",
       projectId: form.get("useProject") ? String(form.get("projectId")) : "",
       date: String(form.get("date") || todayISO()),
-      done: false,
-      createdAt: todayISO(),
-    });
+      done: taskId
+        ? state.tasks.find((task) => task.id === taskId)?.done || false
+        : false,
+      createdAt:
+        state.tasks.find((task) => task.id === taskId)?.createdAt || todayISO(),
+    };
+    state.tasks = taskId
+      ? state.tasks.map((task) => (task.id === taskId ? nextTask : task))
+      : [...state.tasks, nextTask];
     closeModal();
     scheduleSave();
     render();
@@ -635,12 +811,21 @@ function bindModal() {
   document.querySelector("#project-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    state.projects.push({
-      id: uid(),
-      name: String(form.get("name")).trim(),
-      parentId: event.currentTarget.dataset.parentId,
-      createdAt: todayISO(),
-    });
+    const projectId = event.currentTarget.dataset.projectId;
+    if (projectId) {
+      state.projects = state.projects.map((project) =>
+        project.id === projectId
+          ? { ...project, name: String(form.get("name")).trim() }
+          : project,
+      );
+    } else {
+      state.projects.push({
+        id: uid(),
+        name: String(form.get("name")).trim(),
+        parentId: event.currentTarget.dataset.parentId,
+        createdAt: todayISO(),
+      });
+    }
     closeModal();
     scheduleSave();
     render();
@@ -649,12 +834,21 @@ function bindModal() {
 
 function handleAction(button) {
   const { action, id, date } = button.dataset;
+  if (action === "go-back") goBack();
   if (action === "open-task-modal") openTaskModal();
-  if (action === "open-project-modal") openProjectModal();
+  if (action === "edit-task") openTaskModal(id);
+  if (action === "open-project-modal") openProjectModal(state.activeProjectId || "");
   if (action === "open-subproject-modal") openProjectModal(id);
+  if (action === "edit-project") openProjectModal("", id);
+  if (action === "open-project") navigateTo({ view: "projects", activeProjectId: id });
+  if (action === "project-up") {
+    const project = getProject(state.activeProjectId);
+    navigateTo({ view: "projects", activeProjectId: project?.parentId || "" });
+  }
   if (action === "switch-user") {
     if (unsubscribeRemote) unsubscribeRemote();
     state = structuredClone(defaultState);
+    browserHistoryDepth = 0;
     render();
   }
   if (action === "toggle-task") {
@@ -664,15 +858,28 @@ function handleAction(button) {
     render();
   }
   if (action === "delete-task") {
-    state.tasks = state.tasks.filter((task) => task.id !== id);
+    const task = state.tasks.find((item) => item.id === id);
+    if (!task || !confirm(`"${task.title}" 할 일을 삭제할까요?`)) return;
+    state.tasks = state.tasks.filter((item) => item.id !== id);
+    scheduleSave();
+    render();
+  }
+  if (action === "delete-project") {
+    const project = getProject(id);
+    if (!project || !confirm(`"${project.name}" 프로젝트와 하위 항목을 삭제할까요?`)) return;
+    const ids = projectDescendantIds(id);
+    state.projects = state.projects.filter((item) => !ids.has(item.id));
+    state.tasks = state.tasks.filter((task) => !ids.has(task.projectId));
+    state.activeProjectId = project.parentId || "";
     scheduleSave();
     render();
   }
   if (action === "select-day") {
-    if (state.selectedDate === date) state.view = "daily";
-    state.selectedDate = date;
-    scheduleSave();
-    render();
+    navigateTo({
+      view: state.selectedDate === date ? "daily" : state.view,
+      selectedDate: date,
+      activeProjectId: "",
+    });
   }
 }
 
@@ -714,5 +921,6 @@ if (lastNickname) {
   state = makeInitialState(lastNickname);
   openUser(lastNickname);
 } else {
+  replaceBrowserRoute();
   render();
 }

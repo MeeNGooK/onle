@@ -1,0 +1,99 @@
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.back-button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font-size: 30px;
+  line-height: 1;
+}
+
+.panel-subtitle {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.panel-actions,
+.item-actions,
+.project-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.item-actions {
+  justify-content: flex-end;
+}
+
+.project-detail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.project-detail strong {
+  display: block;
+  font-size: 26px;
+}
+
+.project-detail span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.project-card {
+  isolation: isolate;
+}
+
+.project-open {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: transparent;
+}
+
+.project-content {
+  pointer-events: none;
+}
+
+.project-content button {
+  pointer-events: auto;
+}
+
+.project-actions .ghost-button {
+  min-height: 32px;
+  padding: 6px 9px;
+}
+
+@media (max-width: 760px) {
+  .panel-header,
+  .project-detail {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .item-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .back-button {
+    width: 38px;
+    height: 38px;
+  }
+}
