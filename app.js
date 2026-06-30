@@ -51,6 +51,8 @@ const makeInitialState = (nickname = "") => ({
     lowColor: "#ffffff",
     midColor: "#a7e46f",
     highColor: "#14883e",
+    projectBaseColor: "#071426",
+    projectFillColor: "#76c7f2",
     handedness: "right",
     theme: "light",
   },
@@ -388,7 +390,7 @@ function render() {
   }
 
   app.innerHTML = `
-    <div class="shell theme-${state.settings.theme} ui-${state.settings.handedness}">
+    <div class="shell theme-${state.settings.theme} ui-${state.settings.handedness}" style="--project-bg:${state.settings.projectBaseColor};--project-fill:${state.settings.projectFillColor};">
       ${renderSidebar()}
       <main class="main">
         ${renderTopbar()}
@@ -724,6 +726,8 @@ function renderSettings() {
         <div class="field"><label>낮음</label><input name="lowColor" type="color" value="${state.settings.lowColor}" /></div>
         <div class="field"><label>중간</label><input name="midColor" type="color" value="${state.settings.midColor}" /></div>
         <div class="field"><label>높음</label><input name="highColor" type="color" value="${state.settings.highColor}" /></div>
+        <div class="field"><label>프로젝트 배경</label><input name="projectBaseColor" type="color" value="${state.settings.projectBaseColor}" /></div>
+        <div class="field"><label>프로젝트 진행 색</label><input name="projectFillColor" type="color" value="${state.settings.projectFillColor}" /></div>
         <div class="sync-card">
           <strong>${escapeHtml(activeNickname)}</strong>
           <span>${escapeHtml(syncStatus)}</span>
@@ -876,6 +880,8 @@ function bindApp() {
     state.settings.lowColor = String(form.get("lowColor"));
     state.settings.midColor = String(form.get("midColor"));
     state.settings.highColor = String(form.get("highColor"));
+    state.settings.projectBaseColor = String(form.get("projectBaseColor"));
+    state.settings.projectFillColor = String(form.get("projectFillColor"));
     scheduleSave();
     render();
   });
