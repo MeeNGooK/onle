@@ -46,10 +46,13 @@ const makeInitialState = (nickname = "") => ({
   calendarMode: "rate",
   selectedDate: todayISO(),
   activeProjectId: "",
+  calendarDetailDate: "",
   settings: {
     lowColor: "#ffffff",
     midColor: "#a7e46f",
     highColor: "#14883e",
+    handedness: "right",
+    theme: "light",
   },
   projects: sampleProjects(),
   tasks: sampleTasks(),
@@ -171,6 +174,7 @@ function mergeState(loadedState, nickname) {
       : sampleProjects(),
     settings: { ...defaultState.settings, ...(loadedState?.settings || {}) },
     activeProjectId: loadedState?.activeProjectId || "",
+    calendarDetailDate: loadedState?.calendarDetailDate || "",
   };
 }
 
@@ -252,6 +256,7 @@ function currentRoute() {
     view: state.view,
     selectedDate: state.selectedDate,
     activeProjectId: state.activeProjectId || "",
+    calendarDetailDate: state.calendarDetailDate || "",
   };
 }
 
@@ -259,6 +264,7 @@ function applyRoute(route) {
   state.view = route?.view || "daily";
   state.selectedDate = route?.selectedDate || todayISO();
   state.activeProjectId = route?.activeProjectId || "";
+  state.calendarDetailDate = route?.calendarDetailDate || "";
 }
 
 function replaceBrowserRoute() {
@@ -287,7 +293,9 @@ function goBack() {
     navigateTo({ view: "projects", activeProjectId: project?.parentId || "" });
     return;
   }
-  if (state.view !== "daily") navigateTo({ view: "daily", activeProjectId: "" });
+  if (state.view === "calendar" && state.calendarDetailDate) {
+    navigateTo({ view: "calendar", calendarDetailDate: "" });
+  }
 }
 
 window.addEventListener("popstate", (event) => {
@@ -342,8 +350,15 @@ function projectRate(projectId) {
   return percent(tasks.filter((task) => task.done).length, tasks.length);
 }
 
+function taskIsOnDate(task, date) {
+  if (task.hasDeadline && task.startDate && task.endDate) {
+    return task.startDate <= date && date <= task.endDate;
+  }
+  return task.date === date;
+}
+
 function dayTasks(date) {
-  return state.tasks.filter((task) => task.date === date);
+  return state.tasks.filter((task) => taskIsOnDate(task, date));
 }
 
 function dayRate(date) {
@@ -355,6 +370,15 @@ function dayDoneCount(date) {
   return dayTasks(date).filter((task) => task.done).length;
 }
 
+function formatKoreanDate(dateString) {
+  return new Date(`${dateString}T00:00:00`).toLocaleDateString("ko-KR", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "long",
+  });
+}
+
 function render() {
   const app = document.querySelector("#app");
   if (!state.user) {
@@ -364,7 +388,7 @@ function render() {
   }
 
   app.innerHTML = `
-    <div class="shell">
+    <div class="shell theme-${state.settings.theme} ui-${state.settings.handedness}">
       ${renderSidebar()}
       <main class="main">
         ${renderTopbar()}
@@ -454,13 +478,19 @@ function renderTopbar() {
     calendar: "달력",
     settings: "설정",
   };
+  const showBack =
+    (state.view === "projects" && Boolean(state.activeProjectId)) ||
+    (state.view === "calendar" && Boolean(state.calendarDetailDate));
+  const topbarDate = state.view === "daily" ? state.selectedDate : todayISO();
   return `
     <header class="topbar">
       <div class="title-row">
-        <button class="back-button" type="button" data-action="go-back" title="뒤로가기">‹</button>
+        ${showBack ? `<button class="back-button" type="button" data-action="go-back" title="뒤로가기">‹</button>` : ""}
         <div>
           <h2>${titles[state.view]}</h2>
-          <p>${new Date().toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "long" })}</p>
+          <button class="date-button" type="button" data-action="open-date-modal" data-date="${topbarDate}">
+            ${formatKoreanDate(topbarDate)}
+          </button>
         </div>
       </div>
       <div class="stat-row">
@@ -490,6 +520,9 @@ function renderDaily() {
 
 function renderTask(task) {
   const project = getProject(task.projectId);
+  const scheduleLabel = task.hasDeadline
+    ? `${task.startDate} - ${task.endDate}`
+    : task.date;
   return `
     <article class="task-item">
       <button class="check ${task.done ? "done" : ""}" title="완료" data-action="toggle-task" data-id="${task.id}">✓</button>
@@ -497,6 +530,7 @@ function renderTask(task) {
         <p class="task-title ${task.done ? "done" : ""}">${escapeHtml(task.title)}</p>
         <div class="task-meta">
           ${task.detail ? `<span>${escapeHtml(task.detail)}</span>` : ""}
+          <span>${escapeHtml(scheduleLabel)}</span>
           ${project ? `<span class="chip">${escapeHtml(project.name)}</span>` : `<span class="chip">개인</span>`}
         </div>
       </div>
@@ -591,6 +625,8 @@ function renderProjectCard(project) {
 }
 
 function renderCalendar() {
+  if (state.calendarDetailDate) return renderCalendarDetail();
+
   return `
     <section class="panel">
       <div class="panel-header">
@@ -633,6 +669,7 @@ function renderDay(date) {
     <button class="day ${outside ? "outside" : ""} ${iso === state.selectedDate ? "selected" : ""}"
       style="background:${heatColor(value)}"
       data-action="select-day"
+      data-double-action="open-calendar-detail"
       data-date="${iso}">
       <span>${date.getDate()}</span>
       <small>${state.calendarMode === "rate" ? `${dayRate(iso)}%` : `${completed}개`}</small>
@@ -640,11 +677,43 @@ function renderDay(date) {
   `;
 }
 
+function renderCalendarDetail() {
+  const tasks = dayTasks(state.calendarDetailDate);
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h3>${formatKoreanDate(state.calendarDetailDate)}</h3>
+          <p class="panel-subtitle">달력 안에서 보는 일일 플래너</p>
+        </div>
+        <button class="ghost-button" data-action="open-task-modal">할 일 추가</button>
+      </div>
+      <div class="task-list">
+        ${tasks.length ? tasks.map(renderTask).join("") : `<div class="empty">이 날짜에 표시할 일이 없습니다.</div>`}
+      </div>
+    </section>
+  `;
+}
+
 function renderSettings() {
   return `
     <section class="panel">
-      <div class="panel-header"><h3>달력 색상</h3></div>
+      <div class="panel-header"><h3>설정</h3></div>
       <form class="form modal-body" id="settings-form">
+        <div class="field">
+          <label>조작 위치</label>
+          <select name="handedness">
+            <option value="right" ${state.settings.handedness === "right" ? "selected" : ""}>RIGHT</option>
+            <option value="left" ${state.settings.handedness === "left" ? "selected" : ""}>LEFT</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>화면 모드</label>
+          <select name="theme">
+            <option value="light" ${state.settings.theme === "light" ? "selected" : ""}>일반 모드</option>
+            <option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>다크 모드</option>
+          </select>
+        </div>
         <div class="field"><label>낮음</label><input name="lowColor" type="color" value="${state.settings.lowColor}" /></div>
         <div class="field"><label>중간</label><input name="midColor" type="color" value="${state.settings.midColor}" /></div>
         <div class="field"><label>높음</label><input name="highColor" type="color" value="${state.settings.highColor}" /></div>
@@ -661,6 +730,9 @@ function renderSettings() {
 
 function openTaskModal(taskId = "") {
   const task = taskId ? state.tasks.find((item) => item.id === taskId) : null;
+  const modalDate = state.view === "calendar" && state.calendarDetailDate
+    ? state.calendarDetailDate
+    : state.selectedDate;
   const projectOptions = state.projects
     .map(
       (project) =>
@@ -676,7 +748,16 @@ function openTaskModal(taskId = "") {
         <div class="field ${task?.detail ? "" : "hidden"}" data-field="detail"><label>세부 내용</label><textarea name="detail">${escapeHtml(task?.detail || "")}</textarea></div>
         <label class="toggle-row"><input type="checkbox" name="useProject" ${task?.projectId ? "checked" : ""} /> 프로젝트에 연결</label>
         <div class="field ${task?.projectId ? "" : "hidden"}" data-field="project"><label>프로젝트</label><select name="projectId"><option value="">개인</option>${projectOptions}</select></div>
-        <div class="field"><label>날짜</label><input name="date" type="date" value="${task?.date || state.selectedDate}" /></div>
+        <div class="field"><label>날짜</label><input name="date" type="date" value="${task?.date || modalDate}" /></div>
+        <label class="toggle-row"><input type="checkbox" name="hasDeadline" ${task?.hasDeadline ? "checked" : ""} /> 기한 설정</label>
+        <div class="field ${task?.hasDeadline ? "" : "hidden"}" data-field="deadline">
+          <label>처음</label>
+          <input name="startDate" type="date" value="${task?.startDate || task?.date || modalDate}" />
+        </div>
+        <div class="field ${task?.hasDeadline ? "" : "hidden"}" data-field="deadline">
+          <label>끝</label>
+          <input name="endDate" type="date" value="${task?.endDate || task?.date || modalDate}" />
+        </div>
       </div>
       <div class="modal-actions"><button class="text-button" type="button" data-action="close-modal">Cancel</button><button class="primary-button" type="submit">OK</button></div>
     </form>
@@ -690,6 +771,21 @@ function openProjectModal(parentId = "", projectId = "") {
       <div class="modal-header"><strong>${project ? "프로젝트 수정" : parentId ? "소프로젝트 추가" : "프로젝트 추가"}</strong><button class="text-button" type="button" data-action="close-modal">닫기</button></div>
       <div class="modal-body form">
         <div class="field"><label>프로젝트명</label><input name="name" value="${escapeHtml(project?.name || "")}" placeholder="예: 시험 준비" required /></div>
+      </div>
+      <div class="modal-actions"><button class="text-button" type="button" data-action="close-modal">Cancel</button><button class="primary-button" type="submit">OK</button></div>
+    </form>
+  `);
+}
+
+function openDateModal(date = state.selectedDate) {
+  showModal(`
+    <form id="date-form">
+      <div class="modal-header"><strong>날짜 이동</strong><button class="text-button" type="button" data-action="close-modal">닫기</button></div>
+      <div class="modal-body form">
+        <div class="field">
+          <label>날짜</label>
+          <input name="date" type="date" value="${date}" required />
+        </div>
       </div>
       <div class="modal-actions"><button class="text-button" type="button" data-action="close-modal">Cancel</button><button class="primary-button" type="submit">OK</button></div>
     </form>
@@ -739,15 +835,21 @@ function bindWelcome() {
 function bindApp() {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
+      const nextView = button.dataset.view;
       navigateTo({
-        view: button.dataset.view,
-        activeProjectId: button.dataset.view === "projects" ? state.activeProjectId : "",
+        view: nextView,
+        activeProjectId: nextView === "projects" ? "" : "",
+        calendarDetailDate: "",
       });
     });
   });
 
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", () => handleAction(button));
+  });
+
+  document.querySelectorAll("[data-double-action]").forEach((button) => {
+    button.addEventListener("dblclick", () => handleAction(button, button.dataset.doubleAction));
   });
 
   document.querySelectorAll("[data-calendar-mode]").forEach((button) => {
@@ -761,6 +863,8 @@ function bindApp() {
   document.querySelector("#settings-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    state.settings.handedness = String(form.get("handedness"));
+    state.settings.theme = String(form.get("theme"));
     state.settings.lowColor = String(form.get("lowColor"));
     state.settings.midColor = String(form.get("midColor"));
     state.settings.highColor = String(form.get("highColor"));
@@ -783,17 +887,29 @@ function bindModal() {
   document.querySelector("input[name='useProject']")?.addEventListener("change", (event) => {
     document.querySelector("[data-field='project']").classList.toggle("hidden", !event.target.checked);
   });
+  document.querySelector("input[name='hasDeadline']")?.addEventListener("change", (event) => {
+    document
+      .querySelectorAll("[data-field='deadline']")
+      .forEach((field) => field.classList.toggle("hidden", !event.target.checked));
+  });
 
   document.querySelector("#task-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const taskId = event.currentTarget.dataset.taskId;
+    const hasDeadline = Boolean(form.get("hasDeadline"));
+    const date = String(form.get("date") || todayISO());
+    const startDate = String(form.get("startDate") || date);
+    const endDate = String(form.get("endDate") || startDate);
     const nextTask = {
       id: taskId || uid(),
       title: String(form.get("title")).trim(),
       detail: form.get("useDetail") ? String(form.get("detail")).trim() : "",
       projectId: form.get("useProject") ? String(form.get("projectId")) : "",
-      date: String(form.get("date") || todayISO()),
+      date,
+      hasDeadline,
+      startDate: hasDeadline ? (startDate <= endDate ? startDate : endDate) : "",
+      endDate: hasDeadline ? (startDate <= endDate ? endDate : startDate) : "",
       done: taskId
         ? state.tasks.find((task) => task.id === taskId)?.done || false
         : false,
@@ -830,11 +946,25 @@ function bindModal() {
     scheduleSave();
     render();
   });
+
+  document.querySelector("#date-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const date = String(form.get("date") || todayISO());
+    closeModal();
+    if (state.view === "calendar") {
+      navigateTo({ view: "calendar", selectedDate: date, calendarDetailDate: date });
+    } else {
+      navigateTo({ view: "daily", selectedDate: date, activeProjectId: "", calendarDetailDate: "" });
+    }
+  });
 }
 
-function handleAction(button) {
-  const { action, id, date } = button.dataset;
+function handleAction(button, overrideAction = "") {
+  const { id, date } = button.dataset;
+  const action = overrideAction || button.dataset.action;
   if (action === "go-back") goBack();
+  if (action === "open-date-modal") openDateModal(button.dataset.date || state.selectedDate);
   if (action === "open-task-modal") openTaskModal();
   if (action === "edit-task") openTaskModal(id);
   if (action === "open-project-modal") openProjectModal(state.activeProjectId || "");
@@ -876,8 +1006,17 @@ function handleAction(button) {
   }
   if (action === "select-day") {
     navigateTo({
-      view: state.selectedDate === date ? "daily" : state.view,
+      view: state.view,
       selectedDate: date,
+      calendarDetailDate: "",
+      activeProjectId: "",
+    });
+  }
+  if (action === "open-calendar-detail") {
+    navigateTo({
+      view: "calendar",
+      selectedDate: date,
+      calendarDetailDate: date,
       activeProjectId: "",
     });
   }
