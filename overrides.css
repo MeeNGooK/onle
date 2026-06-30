@@ -8,20 +8,6 @@
   justify-content: space-between;
 }
 
-.shell.ui-right {
-  grid-template-columns: minmax(0, 1fr) 260px;
-}
-
-.shell.ui-right .main {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.shell.ui-right .sidebar {
-  grid-column: 2;
-  grid-row: 1;
-}
-
 .ui-left .topbar,
 .ui-left .panel-header,
 .ui-left .project-detail {
@@ -247,10 +233,6 @@ body:has(.theme-dark) {
 
   .ui-left .task-item .item-actions {
     grid-column: 2;
-  }
-
-  .shell.ui-right {
-    display: block;
   }
 
   .back-button {
