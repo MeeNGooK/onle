@@ -482,16 +482,20 @@ function renderTopbar() {
     (state.view === "projects" && Boolean(state.activeProjectId)) ||
     (state.view === "calendar" && Boolean(state.calendarDetailDate));
   const topbarDate = state.view === "daily" ? state.selectedDate : todayISO();
+  const backButton = showBack
+    ? `<button class="back-button" type="button" data-action="go-back" title="뒤로가기">‹</button>`
+    : "";
   return `
     <header class="topbar">
       <div class="title-row">
-        ${showBack ? `<button class="back-button" type="button" data-action="go-back" title="뒤로가기">‹</button>` : ""}
+        ${state.settings.handedness === "left" ? backButton : ""}
         <div>
           <h2>${titles[state.view]}</h2>
           <button class="date-button" type="button" data-action="open-date-modal" data-date="${topbarDate}">
             ${formatKoreanDate(topbarDate)}
           </button>
         </div>
+        ${state.settings.handedness === "right" ? backButton : ""}
       </div>
       <div class="stat-row">
         <div class="stat"><strong>${percent(doneToday, todayTasks.length)}%</strong><span>하루 달성률</span></div>
@@ -555,6 +559,7 @@ function renderProjects() {
         </div>
         <div class="panel-actions">
           ${activeProject ? `<button class="ghost-button" data-action="project-up">상위</button>` : ""}
+          ${activeProject ? `<button class="ghost-button" data-action="open-project-task-modal" data-id="${activeProject.id}">TASK 추가</button>` : ""}
           <button class="ghost-button" data-action="open-project-modal" data-id="${state.activeProjectId || ""}">${activeProject ? "소프로젝트 추가" : "프로젝트 추가"}</button>
         </div>
       </div>
@@ -591,6 +596,7 @@ function renderActiveProjectSummary(project, tasks) {
       </div>
       <div class="panel-actions">
         <button class="text-button" data-action="edit-project" data-id="${project.id}">이름 수정</button>
+        <button class="text-button" data-action="open-project-task-modal" data-id="${project.id}">TASK 추가</button>
         <button class="text-button danger-button" data-action="delete-project" data-id="${project.id}">삭제</button>
       </div>
     </div>
@@ -616,6 +622,7 @@ function renderProjectCard(project) {
           <div class="project-actions">
             <button class="ghost-button" data-action="open-project" data-id="${project.id}">열기</button>
             <button class="ghost-button" data-action="edit-project" data-id="${project.id}">수정</button>
+            <button class="ghost-button" data-action="open-project-task-modal" data-id="${project.id}">TASK 추가</button>
             <button class="ghost-button" data-action="open-subproject-modal" data-id="${project.id}">하위 추가</button>
           </div>
         </div>
@@ -728,15 +735,16 @@ function renderSettings() {
   `;
 }
 
-function openTaskModal(taskId = "") {
+function openTaskModal(taskId = "", defaultProjectId = "") {
   const task = taskId ? state.tasks.find((item) => item.id === taskId) : null;
+  const selectedProjectId = task?.projectId || defaultProjectId;
   const modalDate = state.view === "calendar" && state.calendarDetailDate
     ? state.calendarDetailDate
     : state.selectedDate;
   const projectOptions = state.projects
     .map(
       (project) =>
-        `<option value="${project.id}" ${task?.projectId === project.id ? "selected" : ""}>${escapeHtml(project.name)}</option>`,
+        `<option value="${project.id}" ${selectedProjectId === project.id ? "selected" : ""}>${escapeHtml(project.name)}</option>`,
     )
     .join("");
   showModal(`
@@ -746,8 +754,8 @@ function openTaskModal(taskId = "") {
         <div class="field"><label>제목</label><input name="title" value="${escapeHtml(task?.title || "")}" placeholder="예: 샐러드 해먹기" required /></div>
         <label class="toggle-row"><input type="checkbox" name="useDetail" ${task?.detail ? "checked" : ""} /> 세부 내용 사용</label>
         <div class="field ${task?.detail ? "" : "hidden"}" data-field="detail"><label>세부 내용</label><textarea name="detail">${escapeHtml(task?.detail || "")}</textarea></div>
-        <label class="toggle-row"><input type="checkbox" name="useProject" ${task?.projectId ? "checked" : ""} /> 프로젝트에 연결</label>
-        <div class="field ${task?.projectId ? "" : "hidden"}" data-field="project"><label>프로젝트</label><select name="projectId"><option value="">개인</option>${projectOptions}</select></div>
+        <label class="toggle-row"><input type="checkbox" name="useProject" ${selectedProjectId ? "checked" : ""} /> 프로젝트에 연결</label>
+        <div class="field ${selectedProjectId ? "" : "hidden"}" data-field="project"><label>프로젝트</label><select name="projectId"><option value="">개인</option>${projectOptions}</select></div>
         <div class="field"><label>날짜</label><input name="date" type="date" value="${task?.date || modalDate}" /></div>
         <label class="toggle-row"><input type="checkbox" name="hasDeadline" ${task?.hasDeadline ? "checked" : ""} /> 기한 설정</label>
         <div class="field ${task?.hasDeadline ? "" : "hidden"}" data-field="deadline">
@@ -966,6 +974,7 @@ function handleAction(button, overrideAction = "") {
   if (action === "go-back") goBack();
   if (action === "open-date-modal") openDateModal(button.dataset.date || state.selectedDate);
   if (action === "open-task-modal") openTaskModal();
+  if (action === "open-project-task-modal") openTaskModal("", id);
   if (action === "edit-task") openTaskModal(id);
   if (action === "open-project-modal") openProjectModal(state.activeProjectId || "");
   if (action === "open-subproject-modal") openProjectModal(id);

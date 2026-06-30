@@ -4,6 +4,10 @@
   gap: 12px;
 }
 
+.ui-right .title-row {
+  justify-content: space-between;
+}
+
 .back-button {
   display: grid;
   place-items: center;
@@ -105,6 +109,10 @@
 
 .ui-right .modal-actions {
   justify-content: flex-end;
+}
+
+.ui-left .modal-actions .primary-button {
+  order: -1;
 }
 
 .theme-dark {
